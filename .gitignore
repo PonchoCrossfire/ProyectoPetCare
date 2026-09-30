@@ -1,0 +1,20 @@
+# Archivos de caché de Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Entornos virtuales
+.venv/
+env/
+venv/
+
+# Base de datos local (para que cada quien cree la suya limpia)
+*.db
+*.sqlite3
+
+# Audio pesado opcional
+*.mp3
+*.wav
+
+# Archivos de configuración de VS Code
+.vscode/
