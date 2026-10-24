@@ -18,3 +18,10 @@ venv/
 
 # Archivos de configuración de VS Code
 .vscode/
+
+__pycache__/
+*/__pycache__/
+*.pyc
+petcare_enterprise.db
+comprobantes_pdf/
+assets/*.wav
