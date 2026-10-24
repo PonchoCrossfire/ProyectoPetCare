@@ -1,76 +1,90 @@
 import sqlite3
+from contextlib import contextmanager
 
-DB_PATH = "petcare_enterprise.db"
+DB_NAME = "petcare_enterprise.db"
+
 
 class DatabaseManager:
-    @staticmethod
-    def get_connection():
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute("PRAGMA foreign_keys = ON;")
-        conn.row_factory = sqlite3.Row
-        return conn
+    def __init__(self, db_name: str = DB_NAME):
+        self.db_name = db_name
+        self._init_db()
 
-    @staticmethod
-    def initialize():
-        with DatabaseManager.get_connection() as conn:
+    @contextmanager
+    def get_connection(self):
+        conn = sqlite3.connect(self.db_name)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON;")
+        try:
+            yield conn
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+
+    def _init_db(self):
+        with self.get_connection() as conn:
             cursor = conn.cursor()
-            
-            # RF-06: Control de permisos y usuarios
+
+            # RF-06: Control de permisos y cuentas de usuario
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS usuario (
-                    idUsuario INTEGER PRIMARY KEY AUTOINCREMENT,
+                CREATE TABLE IF NOT EXISTS usuarios (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT UNIQUE NOT NULL,
                     password TEXT NOT NULL,
-                    nombreCompleto TEXT NOT NULL,
-                    rol TEXT NOT NULL CHECK(rol IN ('Administrador', 'Personal'))
+                    rol TEXT NOT NULL CHECK(rol IN ('admin', 'recepcionista'))
                 )
             """)
 
-            # RF-02: Clientes / Propietarios
+            # RF-02, RF-08, RF-09: Clientes
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS cliente (
-                    idCliente INTEGER PRIMARY KEY AUTOINCREMENT,
-                    nombreCliente TEXT NOT NULL,
-                    aPaterno TEXT NOT NULL,
-                    aMaterno TEXT,
-                    fechaRegistro TEXT NOT NULL
-                )
-            """)
-            
-            # RF-03: Mascotas / Pacientes
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS mascota (
-                    idMascota INTEGER PRIMARY KEY AUTOINCREMENT,
-                    nombreMascota TEXT NOT NULL,
-                    especie TEXT NOT NULL,
-                    raza TEXT,
-                    edad INTEGER DEFAULT 0 CHECK(edad >= 0),
-                    idCliente INTEGER NOT NULL,
-                    FOREIGN KEY (idCliente) REFERENCES cliente (idCliente) ON DELETE CASCADE
-                )
-            """)
-            
-            # RF-01 / RF-07: Citas médicas
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS cita (
-                    idCita INTEGER PRIMARY KEY AUTOINCREMENT,
-                    fechaCita TEXT NOT NULL,
-                    horaCita TEXT NOT NULL,
-                    idMascota INTEGER NOT NULL,
-                    idCliente INTEGER NOT NULL,
-                    FOREIGN KEY (idMascota) REFERENCES mascota (idMascota) ON DELETE CASCADE,
-                    FOREIGN KEY (idCliente) REFERENCES cliente (idCliente) ON DELETE CASCADE
+                CREATE TABLE IF NOT EXISTS clientes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    nombre TEXT NOT NULL,
+                    domicilio TEXT NOT NULL,
+                    telefono TEXT NOT NULL,
+                    fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
-            # Usuarios iniciales para pruebas
-            cursor.execute("SELECT COUNT(*) FROM usuario")
-            if cursor.fetchone()[0] == 0:
-                cursor.execute("""
-                    INSERT INTO usuario (username, password, nombreCompleto, rol)
-                    VALUES 
-                    ('admin', 'admin123', 'Administrador General', 'Administrador'),
-                    ('staff', 'staff123', 'Personal Veterinario', 'Personal')
-                """)
+            # RF-03, RF-08, RF-09: Mascotas
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS mascotas (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cliente_id INTEGER NOT NULL,
+                    nombre TEXT NOT NULL,
+                    especie TEXT NOT NULL DEFAULT 'Perro',
+                    raza TEXT NOT NULL,
+                    edad TEXT NOT NULL,
+                    alergias TEXT DEFAULT 'Ninguna',
+                    vacunas TEXT DEFAULT 'Al día',
+                    FOREIGN KEY (cliente_id) REFERENCES clientes(id) ON DELETE CASCADE
+                )
+            """)
 
-            conn.commit()
+            # RF-01, RF-04, RF-05, RF-07, RF-10: Citas y Seguimiento
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS citas (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    mascota_id INTEGER NOT NULL,
+                    fecha TEXT NOT NULL,
+                    hora TEXT NOT NULL,
+                    motivo TEXT NOT NULL,
+                    estado TEXT NOT NULL DEFAULT 'Programada' 
+                        CHECK(estado IN ('Programada', 'Atendida', 'Cancelada')),
+                    notas_clinicas TEXT DEFAULT '',
+                    FOREIGN KEY (mascota_id) REFERENCES mascotas(id) ON DELETE CASCADE
+                )
+            """)
+
+            # Semilla de usuarios por defecto
+            cursor.execute("SELECT COUNT(*) as total FROM usuarios")
+            if cursor.fetchone()["total"] == 0:
+                cursor.executemany(
+                    "INSERT INTO usuarios (username, password, rol) VALUES (?, ?, ?)",
+                    [
+                        ("admin", "admin123", "admin"),
+                        ("recepcion", "vet123", "recepcionista"),
+                    ],
+                )

@@ -1,207 +1,145 @@
-from datetime import datetime
 from database import DatabaseManager
 
-class PetCareService:
-    # --- RF-06: AUTENTICACIÓN Y ROLES ---
-    @staticmethod
-    def autenticar(username: str, password: str):
-        with DatabaseManager.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT idUsuario, username, nombreCompleto, rol 
-                FROM usuario 
-                WHERE username = ? AND password = ?
-            """, (username.strip(), password.strip()))
-            row = cursor.fetchone()
+
+class PetCareRepository:
+    def __init__(self, db: DatabaseManager):
+        self.db = db
+
+    # --- AUTENTICACIÓN (RF-06) ---
+    def autenticar(self, username: str, password: str):
+        with self.db.get_connection() as conn:
+            cur = conn.execute(
+                "SELECT id, username, rol FROM usuarios WHERE username = ? AND password = ?",
+                (username.strip(), password.strip()),
+            )
+            row = cur.fetchone()
             return dict(row) if row else None
 
-    # --- RF-02: CLIENTES ---
-    @staticmethod
-    def crear_cliente(nombre: str, paterno: str, materno: str) -> int:
-        fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with DatabaseManager.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO cliente (nombreCliente, aPaterno, aMaterno, fechaRegistro)
-                VALUES (?, ?, ?, ?)
-            """, (nombre.strip(), paterno.strip(), materno.strip() if materno else None, fecha))
-            conn.commit()
-            return cursor.lastrowid
+    # --- CLIENTES (RF-02, RF-08, RF-09) ---
+    def crear_cliente(self, nombre: str, domicilio: str, telefono: str) -> int:
+        with self.db.get_connection() as conn:
+            cur = conn.execute(
+                "INSERT INTO clientes (nombre, domicilio, telefono) VALUES (?, ?, ?)",
+                (nombre.strip(), domicilio.strip(), telefono.strip()),
+            )
+            return cur.lastrowid
 
-    @staticmethod
-    def listar_clientes():
-        with DatabaseManager.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT idCliente, nombreCliente, aPaterno, aMaterno, fechaRegistro FROM cliente ORDER BY idCliente DESC")
-            return [dict(row) for row in cursor.fetchall()]
+    def actualizar_cliente(self, cliente_id: int, nombre: str, domicilio: str, telefono: str):
+        with self.db.get_connection() as conn:
+            conn.execute(
+                "UPDATE clientes SET nombre = ?, domicilio = ?, telefono = ? WHERE id = ?",
+                (nombre.strip(), domicilio.strip(), telefono.strip(), cliente_id),
+            )
 
-    @staticmethod
-    def actualizar_cliente(id_cliente: int, nombre: str, paterno: str, materno: str):
-        with DatabaseManager.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE cliente 
-                SET nombreCliente = ?, aPaterno = ?, aMaterno = ?
-                WHERE idCliente = ?
-            """, (nombre.strip(), paterno.strip(), materno.strip() if materno else None, int(id_cliente)))
-            conn.commit()
+    def eliminar_cliente(self, cliente_id: int):
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM clientes WHERE id = ?", (cliente_id,))
 
-    @staticmethod
-    def eliminar_cliente(id_cliente: int):
-        with DatabaseManager.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM cliente WHERE idCliente = ?", (int(id_cliente),))
-            conn.commit()
+    def listar_clientes(self, filtro: str = ""):
+        with self.db.get_connection() as conn:
+            if filtro:
+                q = f"%{filtro.strip()}%"
+                cur = conn.execute(
+                    "SELECT * FROM clientes WHERE nombre LIKE ? OR telefono LIKE ? ORDER BY id DESC",
+                    (q, q),
+                )
+            else:
+                cur = conn.execute("SELECT * FROM clientes ORDER BY id DESC")
+            return [dict(r) for r in cur.fetchall()]
 
-    # --- RF-03: MASCOTAS ---
-    @staticmethod
-    def crear_mascota(nombre: str, especie: str, raza: str, edad: int, id_cliente: int) -> int:
-        with DatabaseManager.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO mascota (nombreMascota, especie, raza, edad, idCliente)
-                VALUES (?, ?, ?, ?, ?)
-            """, (nombre.strip(), especie.strip(), raza.strip(), int(edad), int(id_cliente)))
-            conn.commit()
-            return cursor.lastrowid
+    # --- MASCOTAS (RF-03, RF-08, RF-09) ---
+    def crear_mascota(self, cliente_id: int, nombre: str, especie: str, raza: str, edad: str, alergias: str, vacunas: str) -> int:
+        with self.db.get_connection() as conn:
+            cur = conn.execute(
+                """INSERT INTO mascotas (cliente_id, nombre, especie, raza, edad, alergias, vacunas)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (cliente_id, nombre.strip(), especie, raza.strip(), edad.strip(), alergias.strip(), vacunas.strip()),
+            )
+            return cur.lastrowid
 
-    @staticmethod
-    def listar_mascotas_por_cliente(id_cliente: int):
-        with DatabaseManager.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT idMascota, nombreMascota, especie, raza, edad FROM mascota WHERE idCliente = ?", (int(id_cliente),))
-            return [dict(row) for row in cursor.fetchall()]
+    def actualizar_mascota(self, mascota_id: int, cliente_id: int, nombre: str, especie: str, raza: str, edad: str, alergias: str, vacunas: str):
+        with self.db.get_connection() as conn:
+            conn.execute(
+                """UPDATE mascotas 
+                   SET cliente_id=?, nombre=?, especie=?, raza=?, edad=?, alergias=?, vacunas=?
+                   WHERE id=?""",
+                (cliente_id, nombre.strip(), especie, raza.strip(), edad.strip(), alergias.strip(), vacunas.strip(), mascota_id),
+            )
 
-    # --- RF-05: HISTORIAL CLÍNICO DE MASCOTA ---
-    @staticmethod
-    def buscar_mascotas_por_nombre(nombre_mascota: str):
-        with DatabaseManager.get_connection() as conn:
-            cursor = conn.cursor()
-            sql = """
-                SELECT 
-                    m.idMascota,
-                    m.nombreMascota,
-                    m.especie,
-                    m.raza,
-                    m.edad,
-                    (cl.nombreCliente || ' ' || cl.aPaterno || ' ' || COALESCE(cl.aMaterno, '')) AS nomDueno
-                FROM mascota m
-                JOIN cliente cl ON m.idCliente = cl.idCliente
-                WHERE m.nombreMascota LIKE ?
-                ORDER BY m.nombreMascota ASC
+    def eliminar_mascota(self, mascota_id: int):
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM mascotas WHERE id = ?", (mascota_id,))
+
+    def listar_mascotas(self, filtro: str = ""):
+        with self.db.get_connection() as conn:
+            base_sql = """
+                SELECT m.*, c.nombre AS dueno_nombre, c.telefono AS dueno_telefono, c.domicilio AS dueno_domicilio
+                FROM mascotas m
+                JOIN clientes c ON m.cliente_id = c.id
             """
-            cursor.execute(sql, (f"%{nombre_mascota.strip()}%",))
-            return [dict(row) for row in cursor.fetchall()]
+            if filtro:
+                q = f"%{filtro.strip()}%"
+                cur = conn.execute(
+                    base_sql + " WHERE m.nombre LIKE ? OR c.nombre LIKE ? OR m.raza LIKE ? ORDER BY m.id DESC",
+                    (q, q, q),
+                )
+            else:
+                cur = conn.execute(base_sql + " ORDER BY m.id DESC")
+            return [dict(r) for r in cur.fetchall()]
 
-    @staticmethod
-    def obtener_historial_citas_mascota(id_mascota: int):
-        with DatabaseManager.get_connection() as conn:
-            cursor = conn.cursor()
+    # --- CITAS E HISTORIAL (RF-01, RF-04, RF-05, RF-07, RF-10) ---
+    def agendar_cita(self, mascota_id: int, fecha: str, hora: str, motivo: str) -> int:
+        with self.db.get_connection() as conn:
+            cur = conn.execute(
+                "INSERT INTO citas (mascota_id, fecha, hora, motivo, estado) VALUES (?, ?, ?, ?, 'Programada')",
+                (mascota_id, fecha.strip(), hora.strip(), motivo.strip()),
+            )
+            return cur.lastrowid
+
+    def actualizar_cita(self, cita_id: int, fecha: str, hora: str, motivo: str, estado: str, notas: str = ""):
+        with self.db.get_connection() as conn:
+            conn.execute(
+                "UPDATE citas SET fecha=?, hora=?, motivo=?, estado=?, notas_clinicas=? WHERE id=?",
+                (fecha.strip(), hora.strip(), motivo.strip(), estado, notas.strip(), cita_id),
+            )
+
+    def obtener_detalle_cita(self, cita_id: int):
+        with self.db.get_connection() as conn:
+            cur = conn.execute(
+                """
+                SELECT ci.*, m.cliente_id, m.nombre AS mascota_nombre, m.especie, m.raza, m.edad, m.alergias, m.vacunas,
+                       c.nombre AS dueno_nombre, c.telefono AS dueno_telefono, c.domicilio AS dueno_domicilio
+                FROM citas ci
+                JOIN mascotas m ON ci.mascota_id = m.id
+                JOIN clientes c ON m.cliente_id = c.id
+                WHERE ci.id = ?
+                """,
+                (cita_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def buscar_citas(self, filtro_texto: str = "", fecha_exacta: str = "", solo_atendidas: bool = False):
+        with self.db.get_connection() as conn:
             sql = """
-                SELECT 
-                    c.idCita,
-                    c.fechaCita,
-                    c.horaCita,
-                    (cl.nombreCliente || ' ' || cl.aPaterno || ' ' || COALESCE(cl.aMaterno, '')) AS nomDueno
-                FROM cita c
-                JOIN cliente cl ON c.idCliente = cl.idCliente
-                WHERE c.idMascota = ?
-                ORDER BY c.fechaCita DESC, c.horaCita DESC
+                SELECT ci.*, m.nombre AS mascota_nombre, m.especie, m.raza,
+                       c.nombre AS dueno_nombre, c.telefono AS dueno_telefono
+                FROM citas ci
+                JOIN mascotas m ON ci.mascota_id = m.id
+                JOIN clientes c ON m.cliente_id = c.id
+                WHERE 1=1
             """
-            cursor.execute(sql, (int(id_mascota),))
-            return [dict(row) for row in cursor.fetchall()]
+            params = []
+            if solo_atendidas:
+                sql += " AND ci.estado = 'Atendida'"
+            if fecha_exacta:
+                sql += " AND ci.fecha = ?"
+                params.append(fecha_exacta.strip())
+            if filtro_texto:
+                q = f"%{filtro_texto.strip()}%"
+                sql += " AND (m.nombre LIKE ? OR c.nombre LIKE ? OR ci.fecha LIKE ? OR ci.motivo LIKE ?)"
+                params.extend([q, q, q, q])
 
-    # --- RF-01 / RF-07: CITAS Y AGENDA ---
-    @staticmethod
-    def crear_cita(fecha: str, hora: str, id_mascota: int, id_cliente: int) -> int:
-        with DatabaseManager.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO cita (fechaCita, horaCita, idMascota, idCliente)
-                VALUES (?, ?, ?, ?)
-            """, (fecha.strip(), hora.strip(), int(id_mascota), int(id_cliente)))
-            conn.commit()
-            return cursor.lastrowid
-
-    @staticmethod
-    def actualizar_cita(id_cita: int, fecha: str, hora: str):
-        with DatabaseManager.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE cita 
-                SET fechaCita = ?, horaCita = ?
-                WHERE idCita = ?
-            """, (fecha.strip(), hora.strip(), int(id_cita)))
-            conn.commit()
-
-    @staticmethod
-    def eliminar_cita(id_cita: int):
-        with DatabaseManager.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM cita WHERE idCita = ?", (int(id_cita),))
-            conn.commit()
-
-    @staticmethod
-    def buscar_agenda(filtro_dueno="", filtro_mascota="", filtro_fecha=""):
-        sql = """
-            SELECT 
-                c.idCita,
-                c.fechaCita,
-                c.horaCita,
-                (cl.nombreCliente || ' ' || cl.aPaterno || ' ' || COALESCE(cl.aMaterno, '')) AS nomDueno,
-                m.nombreMascota,
-                m.especie,
-                m.raza
-            FROM cita c
-            JOIN cliente cl ON c.idCliente = cl.idCliente
-            JOIN mascota m ON c.idMascota = m.idMascota
-            WHERE 1=1
-        """
-        params = []
-        if filtro_dueno:
-            sql += " AND (cl.nombreCliente LIKE ? OR cl.aPaterno LIKE ?)"
-            params.extend([f"%{filtro_dueno}%", f"%{filtro_dueno}%"])
-        if filtro_mascota:
-            sql += " AND m.nombreMascota LIKE ?"
-            params.append(f"%{filtro_mascota}%")
-        if filtro_fecha:
-            sql += " AND c.fechaCita LIKE ?"
-            params.append(f"%{filtro_fecha}%")
-
-        sql += " ORDER BY c.fechaCita ASC, c.horaCita ASC"
-
-        with DatabaseManager.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(sql, params)
-            return [dict(row) for row in cursor.fetchall()]
-
-    @staticmethod
-    def obtener_citas_por_fecha(fecha_str: str):
-        sql = """
-            SELECT 
-                c.idCita,
-                c.fechaCita,
-                c.horaCita,
-                (cl.nombreCliente || ' ' || cl.aPaterno || ' ' || COALESCE(cl.aMaterno, '')) AS nomDueno,
-                m.nombreMascota,
-                m.especie,
-                m.raza
-            FROM cita c
-            JOIN cliente cl ON c.idCliente = cl.idCliente
-            JOIN mascota m ON c.idMascota = m.idMascota
-            WHERE c.fechaCita = ?
-            ORDER BY c.horaCita ASC
-        """
-        with DatabaseManager.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(sql, (fecha_str.strip(),))
-            return [dict(row) for row in cursor.fetchall()]
-
-    @staticmethod
-    def obtener_metricas():
-        with DatabaseManager.get_connection() as conn:
-            cur = conn.cursor()
-            total_clientes = cur.execute("SELECT COUNT(*) FROM cliente").fetchone()[0]
-            total_mascotas = cur.execute("SELECT COUNT(*) FROM mascota").fetchone()[0]
-            total_citas = cur.execute("SELECT COUNT(*) FROM cita").fetchone()[0]
-            return total_clientes, total_mascotas, total_citas
+            sql += " ORDER BY ci.fecha DESC, ci.hora ASC"
+            cur = conn.execute(sql, params)
+            return [dict(r) for r in cur.fetchall()]
